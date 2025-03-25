@@ -16,12 +16,12 @@ __global__ void K0(const val_t *A, const val_t *B, val_t *C,
     {
         for (pos_t n = blockIdx.y * blockDim.y + threadIdx.y; n < N; n += gridDim.y * blockDim.y)
         {
-            val_t dp = 0;
+            val_t accum = 0;
             for (pos_t k = 0; k < K; k++)
             {
-                dp += A[m * K + k] * B[k * N + n];
+                accum += A[m * K + k] * B[k * N + n];
             }
-            C[m * N + n] = dp;
+            C[m * N + n] = accum;
         }
     }
 }
@@ -133,14 +133,157 @@ inline void K1_launcher(val_t *A, const val_t *B, val_t *C,
     K1<val_t, pos_t, 5000, 5000><<<K, 1024>>>(A, B, C, M, K, N);
 }
 
-// vanilla tile based matmul
+template <typename val_t, typename pos_t, pos_t BS=128, pos_t KS=16, pos_t TS=4>
+void K2_mockup_function(val_t *A, const val_t *B, val_t *C,
+                        const pos_t M, const pos_t K, const pos_t N)
+{
+    //
+}
 
+// // matmul.cu(137): error: an array may not have elements of this type
+// //   __inline__ __attribute__((always_inline)) __attribute__((device)) init_c_tile(val_t &CT[][])
+// //                                                                                            ^
+
+// // matmul.cu(137): error: explicit type is missing ("int" assumed)
+// //   __inline__ __attribute__((always_inline)) __attribute__((device)) init_c_tile(val_t &CT[][])
+// template <typename val_t, typename pos_t, pos_t BS>
+// __forceinline__ __device__ init_c_tile(val_t &CT[][])
+// {
+//     for (pos_t i = threadIdx.x; i < BS; i += blockDim.x)
+//     {
+//         for (pos_t j = threadIdx.y; j < BS; j += blockDim.y)
+//         {
+//             CT[i][j] = 0;
+//         }
+//     }
+// }
+
+// vanilla tile based matmul, divide and conquer, but too many loops
+template <typename val_t, typename pos_t, pos_t BS=128, pos_t KS=16, pos_t TS=8>
+__global__ void K2(const val_t *A, const val_t *B, val_t *C,
+                   const pos_t M, const pos_t K, const pos_t N)
+{
+    // these two should be removed, we're not doing the matmul in inner prod way
+    for (pos_t m0 = blockIdx.x * BS; m0 < M; m0 += gridDim.x * BS)
+    {
+        for (pos_t n0 = blockIdx.y * BS; n0 < N; n0 += gridDim.y * BS)
+        {
+            // keep using uint4/float4 for ldg/stg?
+            // __shared__ val_t CT[BS][BS];
+
+            // init_c_tile<val_t, pos_t, BS>(CT);
+            // for (pos_t i = threadIdx.x; i < BS; i += blockDim.x)
+            // {
+            //     for (pos_t j = threadIdx.y; j < BS; j += blockDim.y)
+            //     {
+            //         CT[i][j] = 0; // switch more efficient shm memset?
+            //     }
+            // }
+
+            // __syncthreads(); // postpone it? no, just del, no need to cache C tile on shm
+
+            register val_t CT[TS][TS];
+
+            for (pos_t i = 0; i < TS; i++)
+            {
+                for (pos_t j = 0; j < TS; j++)
+                {
+                    CT[i][j] = 0;
+                }
+            }
+
+            // people call it main loop
+            for (pos_t k0 = 0; k0 < K; k0 += KS) // how to share shm content cross blocks?
+            {
+                __shared__ val_t AT[BS][KS];
+
+                for (pos_t i = threadIdx.x; i < BS; i += blockDim.x)
+                {
+                    for (pos_t j = threadIdx.y; j < KS; j += blockDim.y)
+                    {
+                        pos_t m = m0 + i, k = k0 + j;
+                        if (m < M && k < K)
+                        {
+                            AT[i][j] = A[m * K + k];
+                        }
+                        else
+                        {
+                            AT[i][j] = 0;
+                        }
+                    }
+                }
+
+                __shared__ val_t BT[KS][BS];
+
+                for (pos_t i = threadIdx.x; i < KS; i += blockDim.x)
+                {
+                    for (pos_t j = threadIdx.y; j < BS; j += blockDim.y)
+                    {
+                        pos_t k = k0 + i, n = n0 + j;
+                        if (k < K && n < N)
+                        {
+                            BT[i][j] = B[k * N + n];
+                        }
+                        else
+                        {
+                            BT[i][j] = 0;
+                        }
+                    }
+                }
+
+                register val_t AC[TS], BR[TS];
+
+                // TODO: load A column, B row
+
+                // 128x16 chunking by 16x16 threads, each thread take 8 elems, do outer dot
+                // oh, sgemm 拆成 2x2 的 4x4 部分原因是因为 float4 形式一次正好 load 这些啊。。。
+                // 从 A load tile 到 shm 上的 AT 的时候顺便要 transpose 也是这个原因
+                // 而且不会同时要按 row 和 col 访问，没 transpose 那种 bank conflicit 顾虑
+
+                #pragma unroll
+                for (pos_t i = 0; i < TS; i++)
+                {
+                    for (pos_t j = 0; j < TS; j++)
+                    {
+                        CT[i][j] += AC[i] * BR[j];
+                    }
+                }
+            }
+
+            for (pos_t i = threadIdx.x; i < BS; i += blockDim.x)
+            {
+                for (pos_t j = threadIdx.y; j < BS; j += blockDim.y)
+                {
+                    pos_t m = m0 + i, n = n0 + j;
+                    if (m < M && n < N)
+                    {
+                        C[m * N + n] = 0; // CT[i][j]; // of course wrong to write CT[i][j];
+                        // atomicAdd(); // <- should be sth like
+                    }
+                }
+            }
+        }
+    }
+}
+
+template <typename val_t, typename pos_t>
+inline void K2_launcher(val_t *A, const val_t *B, val_t *C,
+                        const pos_t M, const pos_t K, const pos_t N)
+{
+    dim3 gd(6 * 3, 8 * 2, 1);
+    dim3 bd(16, 16, 1); // square tile? more threads? shared mem for larger block?
+    K2<val_t, pos_t><<<gd, bd>>>(A, B, C, M, K, N);
+}
 
 // tall and thin matmul
 
 // tiny matmul
 
+// loop over a wide range of M, N, K, dtype, CC/TC combinations
+
 // what if M, N, K or grid size or block size out of boundary?
+
+// what if we want to decouple the building blocks to variants
 
 template <typename val_t, typename pos_t>
 struct Matmul
@@ -258,7 +401,8 @@ struct Matmul
     {
         // K0_launcher(dA, dB, dC, M, K, N);
         // K1_launcher(dA, dB, dC, M, K, N);
-        K1_launcher(dTA, dB, dC, M, K, N);
+        // K1_launcher(dTA, dB, dC, M, K, N);
+        K2_launcher(dA, dB, dC, M, K, N);
     }
 
     void d2h()

@@ -133,93 +133,50 @@ inline void K1_launcher(val_t *A, const val_t *B, val_t *C,
     K1<val_t, pos_t, 5000, 5000><<<K, 1024>>>(A, B, C, M, K, N);
 }
 
-template <typename val_t, typename pos_t, pos_t BS=128, pos_t KS=16, pos_t TS=4>
-void K2_mockup_function(val_t *A, const val_t *B, val_t *C,
-                        const pos_t M, const pos_t K, const pos_t N)
+#include <stdint.h>
+
+#define BS 128
+#define KS 16
+
+// vanilla tile based matmul, recursively divide and conquer, too many loops
+__global__ void K2(const int *A, const int *B, int *C,
+                   const uint32_t M, const uint32_t K, const uint32_t N)
 {
-    //
-}
-
-// // matmul.cu(137): error: an array may not have elements of this type
-// //   __inline__ __attribute__((always_inline)) __attribute__((device)) init_c_tile(val_t &CT[][])
-// //                                                                                            ^
-
-// // matmul.cu(137): error: explicit type is missing ("int" assumed)
-// //   __inline__ __attribute__((always_inline)) __attribute__((device)) init_c_tile(val_t &CT[][])
-// template <typename val_t, typename pos_t, pos_t BS>
-// __forceinline__ __device__ init_c_tile(val_t &CT[][])
-// {
-//     for (pos_t i = threadIdx.x; i < BS; i += blockDim.x)
-//     {
-//         for (pos_t j = threadIdx.y; j < BS; j += blockDim.y)
-//         {
-//             CT[i][j] = 0;
-//         }
-//     }
-// }
-
-// vanilla tile based matmul, divide and conquer, but too many loops
-template <typename val_t, typename pos_t, pos_t BS=128, pos_t KS=16, pos_t TS=8>
-__global__ void K2(const val_t *A, const val_t *B, val_t *C,
-                   const pos_t M, const pos_t K, const pos_t N)
-{
-    // these two should be removed, we're not doing the matmul in inner prod way
-    for (pos_t m0 = blockIdx.x * BS; m0 < M; m0 += gridDim.x * BS)
+    for (uint32_t m0 = blockIdx.x * BS; m0 < M; m0 += gridDim.x * BS)
     {
-        for (pos_t n0 = blockIdx.y * BS; n0 < N; n0 += gridDim.y * BS)
+        for (uint32_t n0 = blockIdx.y * BS; n0 < N; n0 += gridDim.y * BS)
         {
-            // keep using uint4/float4 for ldg/stg?
-            // __shared__ val_t CT[BS][BS];
+            // register int4 CT[2][2][4] = {make_int4(0, 0, 0, 0)};
+            register int CT[2][2][4][4] = {0};
 
-            // init_c_tile<val_t, pos_t, BS>(CT);
-            // for (pos_t i = threadIdx.x; i < BS; i += blockDim.x)
-            // {
-            //     for (pos_t j = threadIdx.y; j < BS; j += blockDim.y)
-            //     {
-            //         CT[i][j] = 0; // switch more efficient shm memset?
-            //     }
-            // }
-
-            // __syncthreads(); // postpone it? no, just del, no need to cache C tile on shm
-
-            register val_t CT[TS][TS];
-
-            for (pos_t i = 0; i < TS; i++)
+            // how to share shm content cross blocks?
+            for (uint32_t k0 = 0; k0 < K; k0 += KS)
             {
-                for (pos_t j = 0; j < TS; j++)
-                {
-                    CT[i][j] = 0;
-                }
-            }
+                __shared__ int AT[KS][BS];
 
-            // people call it main loop
-            for (pos_t k0 = 0; k0 < K; k0 += KS) // how to share shm content cross blocks?
-            {
-                __shared__ val_t AT[BS][KS];
-
-                for (pos_t i = threadIdx.x; i < BS; i += blockDim.x)
+                for (uint32_t i = threadIdx.x; i < BS; i += blockDim.x)
                 {
-                    for (pos_t j = threadIdx.y; j < KS; j += blockDim.y)
+                    for (uint32_t j = threadIdx.y; j < KS; j += blockDim.y)
                     {
-                        pos_t m = m0 + i, k = k0 + j;
+                        uint32_t m = m0 + i, k = k0 + j;
                         if (m < M && k < K)
                         {
-                            AT[i][j] = A[m * K + k];
+                            AT[j][i] = A[m * K + k];
                         }
                         else
                         {
-                            AT[i][j] = 0;
+                            AT[j][i] = 0;
                         }
                     }
                 }
 
-                __shared__ val_t BT[KS][BS];
+                __shared__ int BT[KS][BS];
 
-                for (pos_t i = threadIdx.x; i < KS; i += blockDim.x)
+                for (uint32_t i = threadIdx.x; i < KS; i += blockDim.x)
                 {
-                    for (pos_t j = threadIdx.y; j < BS; j += blockDim.y)
+                    for (uint32_t j = threadIdx.y; j < BS; j += blockDim.y)
                     {
-                        pos_t k = k0 + i, n = n0 + j;
+                        uint32_t k = k0 + i, n = n0 + j;
                         if (k < K && n < N)
                         {
                             BT[i][j] = B[k * N + n];
@@ -231,59 +188,142 @@ __global__ void K2(const val_t *A, const val_t *B, val_t *C,
                     }
                 }
 
-                register val_t AC[TS], BR[TS];
+                register int4 AC[2], BR[2];
 
-                // TODO: load A column, B row
+                // will make_uint4 trigger some smart compiler behaviour to avoid explicit use of int4 dtype here?
+                AC[0] = make_int4(AT[threadIdx.x][threadIdx.y*4], AT[threadIdx.x][threadIdx.y*4+1], AT[threadIdx.x][threadIdx.y*4+2], AT[threadIdx.x][threadIdx.y*4+3]);
+                AC[1] = make_int4(AT[threadIdx.x][threadIdx.y*8], AT[threadIdx.x][threadIdx.y*8+1], AT[threadIdx.x][threadIdx.y*8+2], AT[threadIdx.x][threadIdx.y*8+3]);
+                BR[0] = make_int4(BT[threadIdx.x][threadIdx.y*4], BT[threadIdx.x][threadIdx.y*4+1], BT[threadIdx.x][threadIdx.y*4+2], BT[threadIdx.x][threadIdx.y*4+3]);
+                BR[1] = make_int4(BT[threadIdx.x][threadIdx.y*8], BT[threadIdx.x][threadIdx.y*8+1], BT[threadIdx.x][threadIdx.y*8+2], BT[threadIdx.x][threadIdx.y*8+3]);
 
-                // 128x16 chunking by 16x16 threads, each thread take 8 elems, do outer dot
-                // oh, sgemm 拆成 2x2 的 4x4 部分原因是因为 float4 形式一次正好 load 这些啊。。。
-                // 从 A load tile 到 shm 上的 AT 的时候顺便要 transpose 也是这个原因
-                // 而且不会同时要按 row 和 col 访问，没 transpose 那种 bank conflicit 顾虑
 
-                #pragma unroll
-                for (pos_t i = 0; i < TS; i++)
-                {
-                    for (pos_t j = 0; j < TS; j++)
-                    {
-                        CT[i][j] += AC[i] * BR[j];
-                    }
-                }
+                CT[0][0][0][0] += AC[0].x * BR[0].x;
+                CT[0][0][0][1] += AC[0].x * BR[0].y;
+                CT[0][0][0][2] += AC[0].x * BR[0].z;
+                CT[0][0][0][3] += AC[0].x * BR[0].w;
+                CT[0][0][1][0] += AC[0].y * BR[0].x;
+                CT[0][0][1][1] += AC[0].y * BR[0].y;
+                CT[0][0][1][2] += AC[0].y * BR[0].z;
+                CT[0][0][1][3] += AC[0].y * BR[0].w;
+                CT[0][0][2][0] += AC[0].z * BR[0].x;
+                CT[0][0][2][1] += AC[0].z * BR[0].y;
+                CT[0][0][2][2] += AC[0].z * BR[0].z;
+                CT[0][0][2][3] += AC[0].z * BR[0].w;
+                CT[0][0][3][0] += AC[0].w * BR[0].x;
+                CT[0][0][3][1] += AC[0].w * BR[0].y;
+                CT[0][0][3][2] += AC[0].w * BR[0].z;
+                CT[0][0][3][3] += AC[0].w * BR[0].w;
+
+                CT[0][1][0][0] += AC[0].x * BR[1].x;
+                CT[0][1][0][1] += AC[0].x * BR[1].y;
+                CT[0][1][0][2] += AC[0].x * BR[1].z;
+                CT[0][1][0][3] += AC[0].x * BR[1].w;
+                CT[0][1][1][0] += AC[0].y * BR[1].x;
+                CT[0][1][1][1] += AC[0].y * BR[1].y;
+                CT[0][1][1][2] += AC[0].y * BR[1].z;
+                CT[0][1][1][3] += AC[0].y * BR[1].w;
+                CT[0][1][2][0] += AC[0].z * BR[1].x;
+                CT[0][1][2][1] += AC[0].z * BR[1].y;
+                CT[0][1][2][2] += AC[0].z * BR[1].z;
+                CT[0][1][2][3] += AC[0].z * BR[1].w;
+                CT[0][1][3][0] += AC[0].w * BR[1].x;
+                CT[0][1][3][1] += AC[0].w * BR[1].y;
+                CT[0][1][3][2] += AC[0].w * BR[1].z;
+                CT[0][1][3][3] += AC[0].w * BR[1].w;
+
+                CT[1][0][0][0] += AC[1].x * BR[0].x;
+                CT[1][0][0][1] += AC[1].x * BR[0].y;
+                CT[1][0][0][2] += AC[1].x * BR[0].z;
+                CT[1][0][0][3] += AC[1].x * BR[0].w;
+                CT[1][0][1][0] += AC[1].y * BR[0].x;
+                CT[1][0][1][1] += AC[1].y * BR[0].y;
+                CT[1][0][1][2] += AC[1].y * BR[0].z;
+                CT[1][0][1][3] += AC[1].y * BR[0].w;
+                CT[1][0][2][0] += AC[1].z * BR[0].x;
+                CT[1][0][2][1] += AC[1].z * BR[0].y;
+                CT[1][0][2][2] += AC[1].z * BR[0].z;
+                CT[1][0][2][3] += AC[1].z * BR[0].w;
+                CT[1][0][3][0] += AC[1].w * BR[0].x;
+                CT[1][0][3][1] += AC[1].w * BR[0].y;
+                CT[1][0][3][2] += AC[1].w * BR[0].z;
+                CT[1][0][3][3] += AC[1].w * BR[0].w;
+
+                CT[1][1][0][0] += AC[1].x * BR[1].x;
+                CT[1][1][0][1] += AC[1].x * BR[1].y;
+                CT[1][1][0][2] += AC[1].x * BR[1].z;
+                CT[1][1][0][3] += AC[1].x * BR[1].w;
+                CT[1][1][1][0] += AC[1].y * BR[1].x;
+                CT[1][1][1][1] += AC[1].y * BR[1].y;
+                CT[1][1][1][2] += AC[1].y * BR[1].z;
+                CT[1][1][1][3] += AC[1].y * BR[1].w;
+                CT[1][1][2][0] += AC[1].z * BR[1].x;
+                CT[1][1][2][1] += AC[1].z * BR[1].y;
+                CT[1][1][2][2] += AC[1].z * BR[1].z;
+                CT[1][1][2][3] += AC[1].z * BR[1].w;
+                CT[1][1][3][0] += AC[1].w * BR[1].x;
+                CT[1][1][3][1] += AC[1].w * BR[1].y;
+                CT[1][1][3][2] += AC[1].w * BR[1].z;
+                CT[1][1][3][3] += AC[1].w * BR[1].w;
             }
 
-            for (pos_t i = threadIdx.x; i < BS; i += blockDim.x)
+            // if ((m0 + threadIdx.x * 4) < M && n0 + threadIdx.y * 4 < N)
+            //     ((int4 *)C)[((m0 + threadIdx.x * 4) * N + n0 + threadIdx.y * 4)] = CT[0][0][0];
+            // ((int4 *)C)[0] = CT[0][0][0]; // this line works for write mockup, but the above failed
+
+            #pragma unroll // so backoff to w/o packed int4 write
+            for (int i = 0; i < 2; i++)
             {
-                for (pos_t j = threadIdx.y; j < BS; j += blockDim.y)
+                for (int j = 0; j < 2; j++)
                 {
-                    pos_t m = m0 + i, n = n0 + j;
-                    if (m < M && n < N)
+                    for (int k = 0; k < 4; k++)
                     {
-                        C[m * N + n] = 0; // CT[i][j]; // of course wrong to write CT[i][j];
-                        // atomicAdd(); // <- should be sth like
+                        for (int v = 0; v < 4; v++)
+                        {
+                            uint32_t m = m0 + threadIdx.x * 4 + i * blockDim.x * 4 + k;
+                            uint32_t n = n0 + threadIdx.y * 4 + j * blockDim.y * 4 + v;
+                            if (m < M && n < N)
+                            {
+                                C[m * M + n] = CT[i][j][k][v];
+                            }
+                        }
                     }
                 }
             }
+            C[m0 * N + n0] = CT[0][0][0][0];
+            // uint32_t m = m0 + threadIdx.x, n = n0 + threadIdx.y;
+            // if (m < M && n < N)
+            // {
+            //    C[m * N + n] = CT[0][0][0][0];
+            // }
+
+            // 4 vals packed is troublesome in programming
         }
     }
 }
 
-template <typename val_t, typename pos_t>
-inline void K2_launcher(val_t *A, const val_t *B, val_t *C,
-                        const pos_t M, const pos_t K, const pos_t N)
+inline void K2_launcher(const int *A, const int *B, int *C,
+                        const uint32_t M, const uint32_t K, const uint32_t N)
 {
     dim3 gd(6 * 3, 8 * 2, 1);
     dim3 bd(16, 16, 1); // square tile? more threads? shared mem for larger block?
-    K2<val_t, pos_t><<<gd, bd>>>(A, B, C, M, K, N);
+    K2<<<gd, bd>>>(A, B, C, M, K, N);
 }
 
 // tall and thin matmul
 
 // tiny matmul
 
+// for ffn?
+
 // loop over a wide range of M, N, K, dtype, CC/TC combinations
+
+// okay...cublas
 
 // what if M, N, K or grid size or block size out of boundary?
 
 // what if we want to decouple the building blocks to variants
+
+// okay...cutlass
 
 template <typename val_t, typename pos_t>
 struct Matmul
@@ -400,7 +440,6 @@ struct Matmul
     inline void get_res()
     {
         // K0_launcher(dA, dB, dC, M, K, N);
-        // K1_launcher(dA, dB, dC, M, K, N);
         // K1_launcher(dTA, dB, dC, M, K, N);
         K2_launcher(dA, dB, dC, M, K, N);
     }
@@ -498,7 +537,9 @@ void transpose_test(Matmul<val_t, pos_t> &mm)
 int main()
 {
     fooKernel<<<1, 1>>>();
-    Matmul<int, uint32_t> mm(511, 376, 777);
-    mm.compute(); // TODO: refC by cublas
+    // Matmul<int, uint32_t> mm(511 * 4, 513 * 4, 519 * 4);
+    Matmul<int, uint32_t> mm(8, 4, 8);
+    mm.compute(); // comp refC by cublas?
+    mm.print();
     return 0;
 }

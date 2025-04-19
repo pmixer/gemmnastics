@@ -190,80 +190,84 @@ __global__ void K2(const int *A, const int *B, int *C,
 
                 register int4 AC[2], BR[2];
 
-                // will make_uint4 trigger some smart compiler behaviour to avoid explicit use of int4 dtype here?
-                AC[0] = make_int4(AT[threadIdx.x][threadIdx.y*4], AT[threadIdx.x][threadIdx.y*4+1], AT[threadIdx.x][threadIdx.y*4+2], AT[threadIdx.x][threadIdx.y*4+3]);
-                AC[1] = make_int4(AT[threadIdx.x][threadIdx.y*8], AT[threadIdx.x][threadIdx.y*8+1], AT[threadIdx.x][threadIdx.y*8+2], AT[threadIdx.x][threadIdx.y*8+3]);
-                BR[0] = make_int4(BT[threadIdx.x][threadIdx.y*4], BT[threadIdx.x][threadIdx.y*4+1], BT[threadIdx.x][threadIdx.y*4+2], BT[threadIdx.x][threadIdx.y*4+3]);
-                BR[1] = make_int4(BT[threadIdx.x][threadIdx.y*8], BT[threadIdx.x][threadIdx.y*8+1], BT[threadIdx.x][threadIdx.y*8+2], BT[threadIdx.x][threadIdx.y*8+3]);
+                #pragma unroll
+                for (int tk = 0; tk < K; tk++)
+                {
+                    // will make_uint4 trigger some smart compiler behaviour to avoid explicit use of int4 dtype here?
+                    AC[0] = make_int4(AT[tk][threadIdx.x*4], AT[tk][threadIdx.x*4+1], AT[tk][threadIdx.x*4+2], AT[tk][threadIdx.x*4+3]);
+                    AC[1] = make_int4(AT[tk][(blockDim.x+threadIdx.x)*4], AT[tk][(blockDim.x+threadIdx.x)*4+1], AT[tk][(blockDim.x+threadIdx.x)*8+2], AT[tk][(blockDim.x+threadIdx.x)*8+3]);
+                    BR[0] = make_int4(BT[tk][threadIdx.y*4], BT[tk][threadIdx.y*4+1], BT[tk][threadIdx.y*4+2], BT[tk][threadIdx.y*4+3]);
+                    BR[1] = make_int4(BT[tk][(blockDim.y+threadIdx.y)*4], BT[tk][(blockDim.y+threadIdx.y)*4+1], BT[tk][(blockDim.y+threadIdx.y)*4+2], BT[tk][(blockDim.y+threadIdx.y)*4+3]);
 
 
-                CT[0][0][0][0] += AC[0].x * BR[0].x;
-                CT[0][0][0][1] += AC[0].x * BR[0].y;
-                CT[0][0][0][2] += AC[0].x * BR[0].z;
-                CT[0][0][0][3] += AC[0].x * BR[0].w;
-                CT[0][0][1][0] += AC[0].y * BR[0].x;
-                CT[0][0][1][1] += AC[0].y * BR[0].y;
-                CT[0][0][1][2] += AC[0].y * BR[0].z;
-                CT[0][0][1][3] += AC[0].y * BR[0].w;
-                CT[0][0][2][0] += AC[0].z * BR[0].x;
-                CT[0][0][2][1] += AC[0].z * BR[0].y;
-                CT[0][0][2][2] += AC[0].z * BR[0].z;
-                CT[0][0][2][3] += AC[0].z * BR[0].w;
-                CT[0][0][3][0] += AC[0].w * BR[0].x;
-                CT[0][0][3][1] += AC[0].w * BR[0].y;
-                CT[0][0][3][2] += AC[0].w * BR[0].z;
-                CT[0][0][3][3] += AC[0].w * BR[0].w;
+                    CT[0][0][0][0] += AC[0].x * BR[0].x;
+                    CT[0][0][0][1] += AC[0].x * BR[0].y;
+                    CT[0][0][0][2] += AC[0].x * BR[0].z;
+                    CT[0][0][0][3] += AC[0].x * BR[0].w;
+                    CT[0][0][1][0] += AC[0].y * BR[0].x;
+                    CT[0][0][1][1] += AC[0].y * BR[0].y;
+                    CT[0][0][1][2] += AC[0].y * BR[0].z;
+                    CT[0][0][1][3] += AC[0].y * BR[0].w;
+                    CT[0][0][2][0] += AC[0].z * BR[0].x;
+                    CT[0][0][2][1] += AC[0].z * BR[0].y;
+                    CT[0][0][2][2] += AC[0].z * BR[0].z;
+                    CT[0][0][2][3] += AC[0].z * BR[0].w;
+                    CT[0][0][3][0] += AC[0].w * BR[0].x;
+                    CT[0][0][3][1] += AC[0].w * BR[0].y;
+                    CT[0][0][3][2] += AC[0].w * BR[0].z;
+                    CT[0][0][3][3] += AC[0].w * BR[0].w;
 
-                CT[0][1][0][0] += AC[0].x * BR[1].x;
-                CT[0][1][0][1] += AC[0].x * BR[1].y;
-                CT[0][1][0][2] += AC[0].x * BR[1].z;
-                CT[0][1][0][3] += AC[0].x * BR[1].w;
-                CT[0][1][1][0] += AC[0].y * BR[1].x;
-                CT[0][1][1][1] += AC[0].y * BR[1].y;
-                CT[0][1][1][2] += AC[0].y * BR[1].z;
-                CT[0][1][1][3] += AC[0].y * BR[1].w;
-                CT[0][1][2][0] += AC[0].z * BR[1].x;
-                CT[0][1][2][1] += AC[0].z * BR[1].y;
-                CT[0][1][2][2] += AC[0].z * BR[1].z;
-                CT[0][1][2][3] += AC[0].z * BR[1].w;
-                CT[0][1][3][0] += AC[0].w * BR[1].x;
-                CT[0][1][3][1] += AC[0].w * BR[1].y;
-                CT[0][1][3][2] += AC[0].w * BR[1].z;
-                CT[0][1][3][3] += AC[0].w * BR[1].w;
+                    CT[0][1][0][0] += AC[0].x * BR[1].x;
+                    CT[0][1][0][1] += AC[0].x * BR[1].y;
+                    CT[0][1][0][2] += AC[0].x * BR[1].z;
+                    CT[0][1][0][3] += AC[0].x * BR[1].w;
+                    CT[0][1][1][0] += AC[0].y * BR[1].x;
+                    CT[0][1][1][1] += AC[0].y * BR[1].y;
+                    CT[0][1][1][2] += AC[0].y * BR[1].z;
+                    CT[0][1][1][3] += AC[0].y * BR[1].w;
+                    CT[0][1][2][0] += AC[0].z * BR[1].x;
+                    CT[0][1][2][1] += AC[0].z * BR[1].y;
+                    CT[0][1][2][2] += AC[0].z * BR[1].z;
+                    CT[0][1][2][3] += AC[0].z * BR[1].w;
+                    CT[0][1][3][0] += AC[0].w * BR[1].x;
+                    CT[0][1][3][1] += AC[0].w * BR[1].y;
+                    CT[0][1][3][2] += AC[0].w * BR[1].z;
+                    CT[0][1][3][3] += AC[0].w * BR[1].w;
 
-                CT[1][0][0][0] += AC[1].x * BR[0].x;
-                CT[1][0][0][1] += AC[1].x * BR[0].y;
-                CT[1][0][0][2] += AC[1].x * BR[0].z;
-                CT[1][0][0][3] += AC[1].x * BR[0].w;
-                CT[1][0][1][0] += AC[1].y * BR[0].x;
-                CT[1][0][1][1] += AC[1].y * BR[0].y;
-                CT[1][0][1][2] += AC[1].y * BR[0].z;
-                CT[1][0][1][3] += AC[1].y * BR[0].w;
-                CT[1][0][2][0] += AC[1].z * BR[0].x;
-                CT[1][0][2][1] += AC[1].z * BR[0].y;
-                CT[1][0][2][2] += AC[1].z * BR[0].z;
-                CT[1][0][2][3] += AC[1].z * BR[0].w;
-                CT[1][0][3][0] += AC[1].w * BR[0].x;
-                CT[1][0][3][1] += AC[1].w * BR[0].y;
-                CT[1][0][3][2] += AC[1].w * BR[0].z;
-                CT[1][0][3][3] += AC[1].w * BR[0].w;
+                    CT[1][0][0][0] += AC[1].x * BR[0].x;
+                    CT[1][0][0][1] += AC[1].x * BR[0].y;
+                    CT[1][0][0][2] += AC[1].x * BR[0].z;
+                    CT[1][0][0][3] += AC[1].x * BR[0].w;
+                    CT[1][0][1][0] += AC[1].y * BR[0].x;
+                    CT[1][0][1][1] += AC[1].y * BR[0].y;
+                    CT[1][0][1][2] += AC[1].y * BR[0].z;
+                    CT[1][0][1][3] += AC[1].y * BR[0].w;
+                    CT[1][0][2][0] += AC[1].z * BR[0].x;
+                    CT[1][0][2][1] += AC[1].z * BR[0].y;
+                    CT[1][0][2][2] += AC[1].z * BR[0].z;
+                    CT[1][0][2][3] += AC[1].z * BR[0].w;
+                    CT[1][0][3][0] += AC[1].w * BR[0].x;
+                    CT[1][0][3][1] += AC[1].w * BR[0].y;
+                    CT[1][0][3][2] += AC[1].w * BR[0].z;
+                    CT[1][0][3][3] += AC[1].w * BR[0].w;
 
-                CT[1][1][0][0] += AC[1].x * BR[1].x;
-                CT[1][1][0][1] += AC[1].x * BR[1].y;
-                CT[1][1][0][2] += AC[1].x * BR[1].z;
-                CT[1][1][0][3] += AC[1].x * BR[1].w;
-                CT[1][1][1][0] += AC[1].y * BR[1].x;
-                CT[1][1][1][1] += AC[1].y * BR[1].y;
-                CT[1][1][1][2] += AC[1].y * BR[1].z;
-                CT[1][1][1][3] += AC[1].y * BR[1].w;
-                CT[1][1][2][0] += AC[1].z * BR[1].x;
-                CT[1][1][2][1] += AC[1].z * BR[1].y;
-                CT[1][1][2][2] += AC[1].z * BR[1].z;
-                CT[1][1][2][3] += AC[1].z * BR[1].w;
-                CT[1][1][3][0] += AC[1].w * BR[1].x;
-                CT[1][1][3][1] += AC[1].w * BR[1].y;
-                CT[1][1][3][2] += AC[1].w * BR[1].z;
-                CT[1][1][3][3] += AC[1].w * BR[1].w;
+                    CT[1][1][0][0] += AC[1].x * BR[1].x;
+                    CT[1][1][0][1] += AC[1].x * BR[1].y;
+                    CT[1][1][0][2] += AC[1].x * BR[1].z;
+                    CT[1][1][0][3] += AC[1].x * BR[1].w;
+                    CT[1][1][1][0] += AC[1].y * BR[1].x;
+                    CT[1][1][1][1] += AC[1].y * BR[1].y;
+                    CT[1][1][1][2] += AC[1].y * BR[1].z;
+                    CT[1][1][1][3] += AC[1].y * BR[1].w;
+                    CT[1][1][2][0] += AC[1].z * BR[1].x;
+                    CT[1][1][2][1] += AC[1].z * BR[1].y;
+                    CT[1][1][2][2] += AC[1].z * BR[1].z;
+                    CT[1][1][2][3] += AC[1].z * BR[1].w;
+                    CT[1][1][3][0] += AC[1].w * BR[1].x;
+                    CT[1][1][3][1] += AC[1].w * BR[1].y;
+                    CT[1][1][3][2] += AC[1].w * BR[1].z;
+                    CT[1][1][3][3] += AC[1].w * BR[1].w;
+                }
             }
 
             // if ((m0 + threadIdx.x * 4) < M && n0 + threadIdx.y * 4 < N)
@@ -289,14 +293,7 @@ __global__ void K2(const int *A, const int *B, int *C,
                     }
                 }
             }
-            C[m0 * N + n0] = CT[0][0][0][0];
-            // uint32_t m = m0 + threadIdx.x, n = n0 + threadIdx.y;
-            // if (m < M && n < N)
-            // {
-            //    C[m * N + n] = CT[0][0][0][0];
-            // }
-
-            // 4 vals packed is troublesome in programming
+            // 4 vals packed is kind of troublesome in programming
         }
     }
 }
@@ -538,8 +535,8 @@ int main()
 {
     fooKernel<<<1, 1>>>();
     // Matmul<int, uint32_t> mm(511 * 4, 513 * 4, 519 * 4);
-    Matmul<int, uint32_t> mm(8, 4, 8);
+    Matmul<int, uint32_t> mm(12, 16, 12);
     mm.compute(); // comp refC by cublas?
-    mm.print();
+    // mm.print();
     return 0;
 }

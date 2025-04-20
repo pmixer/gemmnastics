@@ -188,6 +188,8 @@ __global__ void K2(const int *A, const int *B, int *C,
                     }
                 }
 
+                __syncthreads();
+
                 register int4 AC[2], BR[2];
 
                 #pragma unroll
@@ -537,22 +539,23 @@ int main()
     fooKernel<<<1, 1>>>();
 
     // Matmul<int, uint32_t> mm(511 * 4, 513 * 4, 519 * 4);
-    // Matmul<int, uint32_t> mm(32, 32, 24);
     // mm.compute(); // comp refC by cublas?
-    // mm.print();
+    // // mm.print();
 
+    std::srand(std::time({}));
 
-    for (int m = 1; m < 256; m++)
+    for (int m = 1; m < 258; m += std::rand() % 23)
     {
-        for (int k = 1; k < 188; k++)
+        for (int k = 1; k < 177; k += std::rand() % 18)
         {
-            for (int n = 1; n < 300; n++)
+            for (int n = 1; n < 311; n += std::rand() % 66)
             {
-                std::cout << "m=" << m*4 << ",k=" << k*4 << ",n=" << n*4 << std::endl;
-                Matmul<int, uint32_t> mm(m*4, k*4, n*4);
+                std::cout << "m=" << m << ",k=" << k << ",n=" << n << std::endl;
+                Matmul<int, uint32_t> mm(m, k, n);
                 mm.compute();
             }
         }
     }
+
     return 0;
 }

@@ -150,7 +150,7 @@ __global__ void K2(const int *A, const int *B, int *C,
             register int CT[2][2][4][4] = {0};
 
             // how to share shm content cross blocks?
-            for (uint32_t k0 = 0; k0 < K; k0 += KS)
+            for (uint32_t k0 = 0; k0 < K; k0 += KS) // KS = 16 = blockDim.x .y
             {
                 __shared__ int AT[KS][BS];
 
@@ -191,11 +191,11 @@ __global__ void K2(const int *A, const int *B, int *C,
                 register int4 AC[2], BR[2];
 
                 #pragma unroll
-                for (int tk = 0; tk < K; tk++)
+                for (int tk = 0; tk < KS; tk++)
                 {
                     // will make_uint4 trigger some smart compiler behaviour to avoid explicit use of int4 dtype here?
                     AC[0] = make_int4(AT[tk][threadIdx.x*4], AT[tk][threadIdx.x*4+1], AT[tk][threadIdx.x*4+2], AT[tk][threadIdx.x*4+3]);
-                    AC[1] = make_int4(AT[tk][(blockDim.x+threadIdx.x)*4], AT[tk][(blockDim.x+threadIdx.x)*4+1], AT[tk][(blockDim.x+threadIdx.x)*8+2], AT[tk][(blockDim.x+threadIdx.x)*8+3]);
+                    AC[1] = make_int4(AT[tk][(blockDim.x+threadIdx.x)*4], AT[tk][(blockDim.x+threadIdx.x)*4+1], AT[tk][(blockDim.x+threadIdx.x)*4+2], AT[tk][(blockDim.x+threadIdx.x)*4+3]);
                     BR[0] = make_int4(BT[tk][threadIdx.y*4], BT[tk][threadIdx.y*4+1], BT[tk][threadIdx.y*4+2], BT[tk][threadIdx.y*4+3]);
                     BR[1] = make_int4(BT[tk][(blockDim.y+threadIdx.y)*4], BT[tk][(blockDim.y+threadIdx.y)*4+1], BT[tk][(blockDim.y+threadIdx.y)*4+2], BT[tk][(blockDim.y+threadIdx.y)*4+3]);
 
@@ -287,7 +287,7 @@ __global__ void K2(const int *A, const int *B, int *C,
                             uint32_t n = n0 + threadIdx.y * 4 + j * blockDim.y * 4 + v;
                             if (m < M && n < N)
                             {
-                                C[m * M + n] = CT[i][j][k][v];
+                                C[m * N + n] = CT[i][j][k][v];
                             }
                         }
                     }
@@ -489,7 +489,8 @@ struct Matmul
         get_res();
         toc();
         d2h();
-        std::cout << "correct? " << (match()?"yes":"no") << std::endl;
+        assert(match());
+        // std::cout << "correct? " << (match()?"yes":"no") << std::endl;
     }
 
     Matmul() = delete;
@@ -534,9 +535,24 @@ void transpose_test(Matmul<val_t, pos_t> &mm)
 int main()
 {
     fooKernel<<<1, 1>>>();
+
     // Matmul<int, uint32_t> mm(511 * 4, 513 * 4, 519 * 4);
-    Matmul<int, uint32_t> mm(12, 16, 12);
-    mm.compute(); // comp refC by cublas?
+    // Matmul<int, uint32_t> mm(32, 32, 24);
+    // mm.compute(); // comp refC by cublas?
     // mm.print();
+
+
+    for (int m = 1; m < 256; m++)
+    {
+        for (int k = 1; k < 188; k++)
+        {
+            for (int n = 1; n < 300; n++)
+            {
+                std::cout << "m=" << m*4 << ",k=" << k*4 << ",n=" << n*4 << std::endl;
+                Matmul<int, uint32_t> mm(m*4, k*4, n*4);
+                mm.compute();
+            }
+        }
+    }
     return 0;
 }

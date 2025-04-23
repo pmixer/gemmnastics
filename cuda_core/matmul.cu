@@ -7,6 +7,18 @@
 
 #include <cuda.h>
 
+uint64_t flops_of_5070() // w/o caring about TC temporally
+{
+    // cudaDeviceGetAttribute(&val, attr, dev_id);
+    int n_sm;
+    cudaDeviceGetAttribute(&n_sm, cudaDevAttrMultiProcessorCount, 0);
+    int k_clock;
+    cudaDeviceGetAttribute(&k_clock, cudaDevAttrClockRate, 0);
+    uint64_t res = k_clock;
+    res *=  4 * 16 * n_sm * 1000 * 2 * 2;
+    return res;
+}
+
 // inner product based matmul
 template <typename val_t, typename pos_t>
 __global__ void K0(const val_t *A, const val_t *B, val_t *C,
@@ -197,10 +209,7 @@ __global__ void K2(const int *A, const int *B, int *C,
                 {
                     // will make_uint4 trigger some smart compiler behaviour to avoid explicit use of int4 dtype here?
                     AC[0] = make_int4(AT[tk][threadIdx.x*4], AT[tk][threadIdx.x*4+1], AT[tk][threadIdx.x*4+2], AT[tk][threadIdx.x*4+3]);
-                    AC[1] = make_int4(AT[tk][(blockDim.x+threadIdx.x)*4], AT[tk][(blockDim.x+threadIdx.x)*4+1], AT[tk][(blockDim.x+threadIdx.x)*4+2], AT[tk][(blockDim.x+threadIdx.x)*4+3]);
                     BR[0] = make_int4(BT[tk][threadIdx.y*4], BT[tk][threadIdx.y*4+1], BT[tk][threadIdx.y*4+2], BT[tk][threadIdx.y*4+3]);
-                    BR[1] = make_int4(BT[tk][(blockDim.y+threadIdx.y)*4], BT[tk][(blockDim.y+threadIdx.y)*4+1], BT[tk][(blockDim.y+threadIdx.y)*4+2], BT[tk][(blockDim.y+threadIdx.y)*4+3]);
-
 
                     CT[0][0][0][0] += AC[0].x * BR[0].x;
                     CT[0][0][0][1] += AC[0].x * BR[0].y;
@@ -219,6 +228,8 @@ __global__ void K2(const int *A, const int *B, int *C,
                     CT[0][0][3][2] += AC[0].w * BR[0].z;
                     CT[0][0][3][3] += AC[0].w * BR[0].w;
 
+                    BR[1] = make_int4(BT[tk][(blockDim.y+threadIdx.y)*4], BT[tk][(blockDim.y+threadIdx.y)*4+1], BT[tk][(blockDim.y+threadIdx.y)*4+2], BT[tk][(blockDim.y+threadIdx.y)*4+3]);
+
                     CT[0][1][0][0] += AC[0].x * BR[1].x;
                     CT[0][1][0][1] += AC[0].x * BR[1].y;
                     CT[0][1][0][2] += AC[0].x * BR[1].z;
@@ -235,6 +246,8 @@ __global__ void K2(const int *A, const int *B, int *C,
                     CT[0][1][3][1] += AC[0].w * BR[1].y;
                     CT[0][1][3][2] += AC[0].w * BR[1].z;
                     CT[0][1][3][3] += AC[0].w * BR[1].w;
+
+                    AC[1] = make_int4(AT[tk][(blockDim.x+threadIdx.x)*4], AT[tk][(blockDim.x+threadIdx.x)*4+1], AT[tk][(blockDim.x+threadIdx.x)*4+2], AT[tk][(blockDim.x+threadIdx.x)*4+3]);
 
                     CT[1][0][0][0] += AC[1].x * BR[0].x;
                     CT[1][0][0][1] += AC[1].x * BR[0].y;
@@ -303,9 +316,19 @@ __global__ void K2(const int *A, const int *B, int *C,
 inline void K2_launcher(const int *A, const int *B, int *C,
                         const uint32_t M, const uint32_t K, const uint32_t N)
 {
-    dim3 gd(6 * 3, 8 * 2, 1);
+    // dim3 gd(6 * 3, 8 * 2, 1);
+    uint32_t nsmx = 48 * 6;
+    uint32_t nbx = std::min((M - 127) / BS + 1, nsmx);
+    uint32_t nby = std::min((M - 127) / BS + 1, nsmx);
+    dim3 gd(nbx, nby, 1);
     dim3 bd(16, 16, 1); // square tile? more threads? shared mem for larger block?
     K2<<<gd, bd>>>(A, B, C, M, K, N);
+}
+
+inline void cublas_test(const int *A, const int *B, int *C,
+                        const uint32_t M, const uint32_t K, const uint32_t N)
+{
+    //
 }
 
 // tall and thin matmul
@@ -434,6 +457,7 @@ struct Matmul
         cudaEventSynchronize(ee);
         cudaEventElapsedTime(&t_ms, es, ee);
         std::cout << "elapsed time: " << t_ms << "ms" << std::endl;
+        std::cout << (2. * M * K * N) * 1000 / (flops_of_5070() * t_ms) << " fp32 util" << std::endl;
     }
 
     inline void get_res()
@@ -538,17 +562,13 @@ int main()
 {
     fooKernel<<<1, 1>>>();
 
-    // Matmul<int, uint32_t> mm(511 * 4, 513 * 4, 519 * 4);
-    // mm.compute(); // comp refC by cublas?
-    // // mm.print();
-
     std::srand(std::time({}));
 
-    for (int m = 1; m < 258; m += std::rand() % 23)
+    for (int m = 1; m < 1024; m += std::rand() % 123)
     {
-        for (int k = 1; k < 177; k += std::rand() % 18)
+        for (int k = 1; k < 1024; k += std::rand() % 456)
         {
-            for (int n = 1; n < 311; n += std::rand() % 66)
+            for (int n = 1; n < 1024; n += std::rand() % 789)
             {
                 std::cout << "m=" << m << ",k=" << k << ",n=" << n << std::endl;
                 Matmul<int, uint32_t> mm(m, k, n);
